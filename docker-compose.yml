@@ -1,0 +1,198 @@
+# FoodExpress — infrastructure de démonstration.
+# Gateway + 4 services (Commande, Paiement, Restaurant, Livraison)
+# + RabbitMQ + une base PostgreSQL dédiée par service (aucune base partagée).
+#
+# Lancement :  docker compose up --build
+# Ports hôte : gateway 8000, commande 8001, paiement 8002, restaurant 8003,
+#              livraison 8004, RabbitMQ mgmt 15672.
+
+x-service-build: &service-build
+  context: .
+  dockerfile: Dockerfile
+
+x-db-healthcheck: &db-healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+x-svc-healthcheck: &svc-healthcheck
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+services:
+  # ---------------------------------------------------------------- Broker
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: foodexpress
+      RABBITMQ_DEFAULT_PASS: foodexpress
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # console de gestion
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    # Pas de healthcheck ici (volontaire). Sous podman-compose, définir un
+    # healthcheck sur cette image empêche l'entrypoint de céder les droits à
+    # l'utilisateur `rabbitmq` avant d'écrire /var/lib/rabbitmq/.erlang.cookie :
+    # le cookie est créé par root en mode 400, illisible par le process rabbitmq
+    # → « Error reading .erlang.cookie: eacces » et crash. Les services attendent
+    # donc rabbitmq via `service_started` + reconnexion applicative (le broker peut
+    # devenir disponible après eux).
+
+  # ---------------------------------------------------------- Bases (1/service)
+  commande-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: commande
+      POSTGRES_PASSWORD: commande
+      POSTGRES_DB: commande
+    volumes:
+      - commande-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commande"]
+      <<: *db-healthcheck
+
+  paiement-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: paiement
+      POSTGRES_PASSWORD: paiement
+      POSTGRES_DB: paiement
+    volumes:
+      - paiement-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paiement"]
+      <<: *db-healthcheck
+
+  restaurant-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: restaurant
+      POSTGRES_PASSWORD: restaurant
+      POSTGRES_DB: restaurant
+    volumes:
+      - restaurant-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U restaurant"]
+      <<: *db-healthcheck
+
+  livraison-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: livraison
+      POSTGRES_PASSWORD: livraison
+      POSTGRES_DB: livraison
+    volumes:
+      - livraison-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U livraison"]
+      <<: *db-healthcheck
+
+  # -------------------------------------------------------------- Services
+  commande:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: commande
+    environment:
+      SERVICE_NAME: commande
+      DATABASE_URL: postgresql+psycopg://commande:commande@commande-db:5432/commande
+      RABBITMQ_URL: amqp://foodexpress:foodexpress@rabbitmq:5672/
+      RESTAURANT_URL: http://restaurant:8000
+      PAIEMENT_URL: http://paiement:8000
+    ports:
+      - "8001:8000"
+    depends_on:
+      commande-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    healthcheck: *svc-healthcheck
+
+  paiement:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: paiement
+    environment:
+      SERVICE_NAME: paiement
+      DATABASE_URL: postgresql+psycopg://paiement:paiement@paiement-db:5432/paiement
+      RABBITMQ_URL: amqp://foodexpress:foodexpress@rabbitmq:5672/
+    ports:
+      - "8002:8000"
+    depends_on:
+      paiement-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    healthcheck: *svc-healthcheck
+
+  restaurant:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: restaurant
+    environment:
+      SERVICE_NAME: restaurant
+      DATABASE_URL: postgresql+psycopg://restaurant:restaurant@restaurant-db:5432/restaurant
+      RABBITMQ_URL: amqp://foodexpress:foodexpress@rabbitmq:5672/
+    ports:
+      - "8003:8000"
+    depends_on:
+      restaurant-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    healthcheck: *svc-healthcheck
+
+  livraison:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: livraison
+    environment:
+      SERVICE_NAME: livraison
+      DATABASE_URL: postgresql+psycopg://livraison:livraison@livraison-db:5432/livraison
+      RABBITMQ_URL: amqp://foodexpress:foodexpress@rabbitmq:5672/
+    ports:
+      - "8004:8000"
+    depends_on:
+      livraison-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    healthcheck: *svc-healthcheck
+
+  # ---------------------------------------------------------- Gateway / BFF
+  gateway:
+    build:
+      <<: *service-build
+      args:
+        SERVICE: gateway
+    environment:
+      SERVICE_NAME: gateway
+      COMMANDE_URL: http://commande:8000
+      PAIEMENT_URL: http://paiement:8000
+      RESTAURANT_URL: http://restaurant:8000
+      LIVRAISON_URL: http://livraison:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      commande:
+        condition: service_healthy
+      paiement:
+        condition: service_healthy
+      restaurant:
+        condition: service_healthy
+      livraison:
+        condition: service_healthy
+    healthcheck: *svc-healthcheck
+
+volumes:
+  rabbitmq-data:
+  commande-db-data:
+  paiement-db-data:
+  restaurant-db-data:
+  livraison-db-data:
