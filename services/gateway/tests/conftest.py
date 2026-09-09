@@ -2,8 +2,8 @@
 
 On n'exécute aucun vrai HTTP : le `ProxyClient` est reconstruit autour d'un
 transport simulé (`FakeBackend`) qui enregistre les requêtes relayées, renvoie des
-réponses configurables et peut simuler pannes/timeouts (pour Timeout + Retry). La
-dépendance `get_proxy` est surchargée pour l'injecter.
+réponses configurables et peut simuler des pannes réseau. La dépendance `get_proxy`
+est surchargée pour l'injecter.
 """
 import httpx
 import pytest
@@ -26,14 +26,9 @@ class FakeBackend:
         self.responses: dict[tuple[str, str], tuple[int, dict]] = {}
         # Simulation de panne : "timeout" | "connect" | None.
         self.fail: str | None = None
-        # Nombre d'échecs transitoires avant succès (pour tester le Retry).
-        self.fail_times = 0
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        if self.fail_times > 0:
-            self.fail_times -= 1
-            raise httpx.ConnectError("panne transitoire", request=request)
         if self.fail == "timeout":
             raise httpx.ReadTimeout("amont lent", request=request)
         if self.fail == "connect":

@@ -1,14 +1,14 @@
 """PSP externe mocké (Payment Service Provider).
 
 Simule l'intégration d'un prestataire de paiement, **sans appel réseau**. C'est le
-point de défaillance n°1 de l'architecture (architecture.md §2.2, §7) : c'est donc
-lui que le Circuit Breaker de Commande protège.
+point de défaillance n°1 de l'architecture (architecture.md §2.2) : une panne du
+PSP se propage donc directement à l'orchestrateur Commande.
 
 Levier de démo SAGA : un montant `>= DECLINE_THRESHOLD` est refusé de façon
 déterministe (« fonds insuffisants »), ce qui déclenche la branche de compensation
 « paiement échoue » du diagramme de séquence (architecture.md §5.3). Le refus d'un
 PSP est un échec **métier** (réponse 402) distinct d'une **panne** du service
-Paiement (conteneur arrêté), que le Circuit Breaker traite côté Commande.
+Paiement (conteneur arrêté), qui remonte en erreur d'appel côté Commande.
 """
 import uuid
 from dataclasses import dataclass

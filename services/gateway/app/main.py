@@ -1,9 +1,9 @@
 """API Gateway / BFF — point d'entrée unique du système (architecture.md §8).
 
 Assure : **routage** vers le bon service amont (reverse-proxy, routers/proxy.py),
-**terminaison d'authentification** mockée (auth.py), **résilience sortante**
-Timeout + Retry (proxy.py), et **agrégation BFF** (routers/bff.py) — le tout en
-masquant la topologie interne au client.
+**terminaison d'authentification** mockée (auth.py), et **agrégation BFF**
+(routers/bff.py) — le tout en masquant la topologie interne au client. Les appels
+sortants sont directs (aucun mécanisme de résilience).
 
 Les routes d'agrégation sont montées **avant** le catch-all du proxy pour avoir la
 priorité de match. `/health`, `/`, `/status` restent publics (healthcheck Compose,

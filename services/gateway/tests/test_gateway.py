@@ -1,4 +1,4 @@
-"""Tests du Gateway : auth mockée, routage/reverse-proxy, résilience, agrégation BFF."""
+"""Tests du Gateway : auth mockée, routage/reverse-proxy, pannes amont, agrégation BFF."""
 
 
 # --------------------------------------------------------------- Authentification
@@ -65,7 +65,7 @@ def test_relays_business_error_status(client, backend):
 
     backend.responses[("POST", "/api/v1/payments")] = (402, {"motif": "refusé"})
     resp = client.post("/api/v1/payments", json={"montant": 1200}, headers=AUTH)
-    assert resp.status_code == 402  # verdict métier relayé tel quel (pas de retry)
+    assert resp.status_code == 402  # verdict métier relayé tel quel
 
 
 def test_query_params_forwarded(client, backend):
@@ -84,7 +84,7 @@ def test_propagates_user_id_and_strips_token(client, backend):
     assert "authorization" not in sent.headers  # auth terminée au Gateway
 
 
-# ------------------------------------------------------ Résilience sortante
+# ---------------------------------------------------------- Pannes amont
 def test_downstream_timeout_returns_504(client, backend):
     from tests.conftest import AUTH
 
@@ -100,14 +100,6 @@ def test_downstream_unreachable_returns_502(client, backend):
     resp = client.get("/api/v1/orders/1", headers=AUTH)
     assert resp.status_code == 502
 
-
-def test_retry_recovers_from_transient_error(client, backend):
-    from tests.conftest import AUTH
-
-    backend.fail_times = 1  # 1er essai échoue, 2e réussit
-    resp = client.get("/api/v1/orders/1", headers=AUTH)
-    assert resp.status_code == 200
-    assert len(backend.requests) == 2  # Retry a rejoué l'appel
 
 
 # ----------------------------------------------------------- Agrégation BFF

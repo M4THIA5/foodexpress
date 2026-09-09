@@ -2,8 +2,8 @@
 
 Service feuille de la SAGA (architecture.md §3.2) : appelé en synchrone par
 l'orchestrateur Commande (débit, puis remboursement en compensation). Il intègre un
-PSP mocké — point de défaillance n°1 protégé par le Circuit Breaker côté Commande
-(architecture.md §7). Au démarrage il crée ses tables.
+PSP mocké — point de défaillance n°1 de l'architecture. Au démarrage il crée ses
+tables.
 """
 from contextlib import asynccontextmanager
 
