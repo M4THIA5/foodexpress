@@ -7,8 +7,8 @@ Flux nominal et compensations :
 
   1. crée `order` (PENDING) + snapshot des lignes depuis le menu Restaurant ;
   2. `Restaurant.acceptOrder()`  → refus ⇒ CANCELLED ;
-  3. `Paiement.debit()` (Circuit Breaker) →
-        - panne/circuit ouvert ⇒ *fail-fast* + `Restaurant.cancel()` ⇒ CANCELLED,
+  3. `Paiement.debit()` →
+        - panne du service ⇒ `Restaurant.cancel()` ⇒ CANCELLED,
         - refus métier (402)   ⇒ `Restaurant.cancel()` ⇒ CANCELLED ;
   4. publie `OrderReadyForDelivery` ⇒ AWAITING_DELIVERY (attente événement) ;
   5. résultat livraison (événement / rappel) →
@@ -106,12 +106,12 @@ def create_order(
         return _cancel(session, order, "RESTAURANT_ACCEPT", "REFUSED", accept.motif)
     _log(order, "RESTAURANT_ACCEPT", "OK")
 
-    # 3. Paiement (synchrone, Circuit Breaker). Restaurant est déjà engagé :
+    # 3. Paiement (synchrone). Restaurant est déjà engagé :
     #    tout échec ici doit compenser par Restaurant.cancel().
     try:
         payment = clients.debit(order.id, order.montant_total)
     except PaymentUnavailable as exc:
-        # Fail-fast (circuit ouvert / panne) → compensation immédiate.
+        # Panne du service Paiement → compensation.
         _log(order, "PAYMENT", "UNAVAILABLE", str(exc))
         clients.cancel_order(order.id)
         return _cancel(

@@ -58,7 +58,7 @@ class FakeClients:
 
     def debit(self, order_id, montant) -> PaymentResult:
         if self.payment == "unavailable":
-            raise PaymentUnavailable("Circuit ouvert (Paiement indisponible)")
+            raise PaymentUnavailable("Paiement indisponible")
         if self.payment == "declined":
             return PaymentResult(captured=False, motif="Fonds insuffisants")
         self._next_txn += 1

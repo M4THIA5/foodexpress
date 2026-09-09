@@ -94,8 +94,8 @@ def test_payment_declined_compensates_restaurant(client, clients):
     assert _steps(body)["PAYMENT"] == "DECLINED"
 
 
-def test_payment_unavailable_fails_fast_and_compensates(client, clients):
-    # Circuit ouvert / Paiement en panne → fail-fast + compensation immédiate.
+def test_payment_unavailable_compensates(client, clients):
+    # Paiement en panne → compensation.
     clients.payment = "unavailable"
     body = client.post(f"{API}/orders", json=_order()).json()
     order_id = body["id"]

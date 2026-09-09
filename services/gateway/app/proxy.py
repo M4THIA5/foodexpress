@@ -1,10 +1,10 @@
-"""Client HTTP sortant résilient du Gateway (Timeout + Retry — architecture.md §7, §8).
+"""Client HTTP sortant du Gateway (architecture.md §8).
 
 Le Gateway est un reverse-proxy : il relaie la requête cliente vers le service amont
-puis renvoie sa réponse. Chaque appel sortant porte un **Timeout court** et un
-**Retry limité** sur erreurs transitoires. Une panne amont (réseau/timeout après
-retries) est convertie en `GatewayError` — traduite en **502/504** côté client — la
-topologie interne restant masquée.
+puis renvoie sa réponse. L'appel est **direct**, sans mécanisme de résilience (pas de
+Retry, pas de Timeout explicite). Une panne amont (réseau) est convertie en
+`GatewayError` — traduite en **502/504** côté client — la topologie interne restant
+masquée.
 
 Le client est asynchrone (`httpx.AsyncClient`) : un proxy est I/O-bound et peut
 relayer plusieurs appels en parallèle (voir l'agrégation BFF). `ProxyClient` est
@@ -16,11 +16,6 @@ import httpx
 from fastapi import Response
 
 from app.downstreams import DOWNSTREAMS
-
-# Timeout court : on ne bloque pas le client si un service amont est en panne.
-GATEWAY_TIMEOUT = 5.0
-# Retry limité sur erreurs transitoires (idempotent au niveau transport).
-GATEWAY_ATTEMPTS = 2
 
 # En-têtes à ne pas relayer tels quels vers l'amont (hop-by-hop / recalculés /
 # terminaison d'auth au Gateway — voir auth.py qui réémet `X-User-Id`).
@@ -35,7 +30,7 @@ _STRIP_RESPONSE_HEADERS = {
 
 
 class GatewayError(Exception):
-    """Service amont injoignable après Timeout + Retry → réponse 502/504."""
+    """Service amont injoignable → réponse 502/504."""
 
     def __init__(self, message: str, status_code: int = 502) -> None:
         super().__init__(message)
@@ -43,17 +38,15 @@ class GatewayError(Exception):
 
 
 class ProxyClient:
-    """Relaie une requête vers un service amont avec Timeout + Retry."""
+    """Relaie une requête vers un service amont."""
 
     def __init__(
         self,
         base_urls: dict[str, str],
         client: httpx.AsyncClient | None = None,
-        attempts: int = GATEWAY_ATTEMPTS,
     ) -> None:
         self._base = {name: url.rstrip("/") for name, url in base_urls.items()}
-        self._client = client or httpx.AsyncClient(timeout=GATEWAY_TIMEOUT)
-        self._attempts = attempts
+        self._client = client or httpx.AsyncClient()
 
     async def forward(
         self,
@@ -67,9 +60,9 @@ class ProxyClient:
     ) -> httpx.Response:
         """Relaie l'appel vers `service` et renvoie sa réponse HTTP brute.
 
-        Lève `GatewayError` (504 sur timeout, 502 sur autre panne réseau) une fois
-        les tentatives épuisées ; un statut d'erreur *applicatif* (4xx/5xx renvoyé
-        par l'amont) est en revanche relayé tel quel, sans retry.
+        Lève `GatewayError` (504 sur timeout, 502 sur autre panne réseau) ; un statut
+        d'erreur *applicatif* (4xx/5xx renvoyé par l'amont) est en revanche relayé tel
+        quel.
         """
         url = f"{self._base[service]}{path}"
         fwd_headers = {
@@ -77,18 +70,14 @@ class ProxyClient:
             for k, v in (headers or {}).items()
             if k.lower() not in _STRIP_REQUEST_HEADERS
         }
-        last: GatewayError | None = None
-        for _ in range(self._attempts):
-            try:
-                return await self._client.request(
-                    method, url, params=params, headers=fwd_headers, content=content
-                )
-            except httpx.TimeoutException as exc:
-                last = GatewayError(f"{service} timeout : {exc}", status_code=504)
-            except httpx.TransportError as exc:
-                last = GatewayError(f"{service} injoignable : {exc}", status_code=502)
-        assert last is not None
-        raise last
+        try:
+            return await self._client.request(
+                method, url, params=params, headers=fwd_headers, content=content
+            )
+        except httpx.TimeoutException as exc:
+            raise GatewayError(f"{service} timeout : {exc}", status_code=504) from exc
+        except httpx.TransportError as exc:
+            raise GatewayError(f"{service} injoignable : {exc}", status_code=502) from exc
 
     async def aclose(self) -> None:
         await self._client.aclose()
