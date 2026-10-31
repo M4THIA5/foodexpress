@@ -85,6 +85,15 @@ def test_propagates_user_id_and_strips_token(client, backend):
 
 
 # ------------------------------------------------------ Résilience sortante
+def test_timeouts_decrease_down_the_chain(client, backend):
+    from app.proxy import COMMANDE_TIMEOUT, GATEWAY_TIMEOUT
+    from tests.conftest import AUTH
+
+    client.get("/api/v1/orders/1", headers=AUTH)
+    client.get("/api/v1/restaurants/1/menu", headers=AUTH)
+    assert backend.timeouts == [COMMANDE_TIMEOUT, GATEWAY_TIMEOUT]
+
+
 def test_downstream_timeout_returns_504(client, backend):
     from tests.conftest import AUTH
 

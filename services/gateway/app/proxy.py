@@ -17,8 +17,13 @@ from fastapi import Response
 
 from app.downstreams import DOWNSTREAMS
 
-# Timeout court : on ne bloque pas le client si un service amont est en panne.
-GATEWAY_TIMEOUT = 5.0
+# Les timeouts décroissent en descendant la chaîne, sinon le Gateway abandonne avant
+# que Commande n'ait fini de compenser. Pire cas d'une SAGA : menu 1 s + acceptation 1 s
+# + débit ~3,6 s (3 essais et backoff) + annulation 1 s, soit environ 6,6 s.
+COMMANDE_TIMEOUT = 8.0
+# Les autres services sont des feuilles : leur réponse nominale prend quelques ms.
+GATEWAY_TIMEOUT = 2.0
+SERVICE_TIMEOUTS = {"commande": COMMANDE_TIMEOUT}
 # Retry limité sur erreurs transitoires (idempotent au niveau transport).
 GATEWAY_ATTEMPTS = 2
 
@@ -81,7 +86,12 @@ class ProxyClient:
         for _ in range(self._attempts):
             try:
                 return await self._client.request(
-                    method, url, params=params, headers=fwd_headers, content=content
+                    method,
+                    url,
+                    params=params,
+                    headers=fwd_headers,
+                    content=content,
+                    timeout=SERVICE_TIMEOUTS.get(service, GATEWAY_TIMEOUT),
                 )
             except httpx.TimeoutException as exc:
                 last = GatewayError(f"{service} timeout : {exc}", status_code=504)

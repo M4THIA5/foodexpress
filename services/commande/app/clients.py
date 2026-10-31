@@ -21,9 +21,12 @@ import httpx
 from app.circuit_breaker import CircuitBreaker, CircuitOpenError
 from common.config import settings
 
-# Timeout court sur Paiement : on ne veut pas bloquer la SAGA en cas de panne PSP.
-PAYMENT_TIMEOUT = 2.0
-RESTAURANT_TIMEOUT = 3.0
+# Calibrage sur les traces SAGA : un appel nominal prend moins de 100 ms sur la stack
+# de démonstration. 1 s laisse une large marge sans dépasser l'objectif de manière
+# durable, et 0,5 s suffit à établir une connexion sur le réseau interne.
+# Ces valeurs doivent rester inférieures au budget du Gateway (app/proxy.py).
+PAYMENT_TIMEOUT = httpx.Timeout(1.0, connect=0.5)
+RESTAURANT_TIMEOUT = httpx.Timeout(1.0, connect=0.5)
 # Retry limité sur erreurs transitoires avant de compter un échec du circuit.
 PAYMENT_ATTEMPTS = 2
 

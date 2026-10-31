@@ -22,6 +22,7 @@ class FakeBackend:
 
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
+        self.timeouts: list[float] = []
         # Réponses par (méthode, chemin) → (status, corps JSON). Défaut : 200.
         self.responses: dict[tuple[str, str], tuple[int, dict]] = {}
         # Simulation de panne : "timeout" | "connect" | None.
@@ -31,6 +32,7 @@ class FakeBackend:
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        self.timeouts.append(request.extensions["timeout"]["read"])
         if self.fail_times > 0:
             self.fail_times -= 1
             raise httpx.ConnectError("panne transitoire", request=request)
