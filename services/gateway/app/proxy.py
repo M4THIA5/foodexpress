@@ -2,9 +2,10 @@
 
 Le Gateway est un reverse-proxy : il relaie la requête cliente vers le service amont
 puis renvoie sa réponse. L'appel est **direct**, sans mécanisme de résilience (pas de
-Retry, pas de Timeout explicite). Une panne amont (réseau) est convertie en
-`GatewayError` — traduite en **502/504** côté client — la topologie interne restant
-masquée.
+Retry, pas de Timeout) : `timeout=None` fait attendre l'amont indéfiniment, y compris
+pour obtenir une connexion du pool, unique et partagé par tous les services. Une panne
+amont (réseau) est convertie en `GatewayError` — traduite en **502/504** côté client —
+la topologie interne restant masquée.
 
 Le client est asynchrone (`httpx.AsyncClient`) : un proxy est I/O-bound et peut
 relayer plusieurs appels en parallèle (voir l'agrégation BFF). `ProxyClient` est
@@ -46,7 +47,7 @@ class ProxyClient:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base = {name: url.rstrip("/") for name, url in base_urls.items()}
-        self._client = client or httpx.AsyncClient()
+        self._client = client or httpx.AsyncClient(timeout=None)
 
     async def forward(
         self,

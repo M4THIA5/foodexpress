@@ -7,8 +7,8 @@ l'orchestrateur a besoin du résultat pour avancer ou compenser.
 - Paiement   : `debit()`, `refund()` (compensation).
 
 Les appels sont **directs** : aucun mécanisme de résilience (pas de Circuit Breaker,
-pas de Retry, pas de Timeout explicite). Un appel part sur le réseau à chaque fois
-et attend la réponse de l'amont.
+pas de Retry, pas de Timeout). `timeout=None` lève la limite de 5 s qu'httpx applique
+par défaut : l'appelant attend la réponse de l'amont **indéfiniment**.
 
 Le résultat *métier* est renvoyé sous forme de dataclasses ; les **pannes** (réseau,
 5xx) lèvent `RestaurantUnavailable` / `PaymentUnavailable` — distinctes d'un refus
@@ -71,7 +71,7 @@ class ServiceClients:
         """Récupère le menu pour constituer le snapshot des lignes de commande."""
         url = f"{self._restaurant_url}{self._api}/restaurants/{restaurant_id}/menu"
         try:
-            resp = httpx.get(url)
+            resp = httpx.get(url, timeout=None)
         except httpx.HTTPError as exc:
             raise RestaurantUnavailable(str(exc)) from exc
         if resp.status_code != 200:
@@ -90,7 +90,7 @@ class ServiceClients:
         url = f"{self._restaurant_url}{self._api}/restaurants/{restaurant_id}/orders"
         body = {"order_id": order_id, "items": items}
         try:
-            resp = httpx.post(url, json=body)
+            resp = httpx.post(url, json=body, timeout=None)
         except httpx.HTTPError as exc:
             raise RestaurantUnavailable(str(exc)) from exc
         if resp.status_code == 200:
@@ -103,7 +103,7 @@ class ServiceClients:
         """Compensation : `Restaurant.cancel()`. Best-effort (idempotent côté resto)."""
         url = f"{self._restaurant_url}{self._api}/restaurants/orders/{order_id}/cancel"
         try:
-            httpx.post(url)
+            httpx.post(url, timeout=None)
         except httpx.HTTPError:
             # La compensation est rejouable : une panne ici ne doit pas la bloquer.
             pass
@@ -118,7 +118,7 @@ class ServiceClients:
         url = f"{self._paiement_url}{self._api}/payments"
         body = {"order_id": order_id, "montant": float(montant)}
         try:
-            resp = httpx.post(url, json=body)
+            resp = httpx.post(url, json=body, timeout=None)
             if resp.status_code == 201:
                 return PaymentResult(captured=True, transaction_id=resp.json()["id"])
             if resp.status_code == 402:
@@ -133,7 +133,7 @@ class ServiceClients:
         """Compensation : `Paiement.refund()` (total). Best-effort et idempotent."""
         url = f"{self._paiement_url}{self._api}/payments/{transaction_id}/refund"
         try:
-            httpx.post(url, json={"motif": "Compensation SAGA"})
+            httpx.post(url, json={"motif": "Compensation SAGA"}, timeout=None)
         except httpx.HTTPError:
             pass
 

@@ -9,7 +9,7 @@ et RabbitMQ pour les événements asynchrones :
 
 | Composant  | Port hôte | Rôle |
 |------------|-----------|------|
-| Gateway / BFF | 8000 | point d'entrée unique, résilience sortante |
+| Gateway / BFF | 8000 | point d'entrée unique, reverse-proxy |
 | Commande   | 8001 | orchestrateur de la SAGA |
 | Paiement   | 8002 | débit / remboursement (PSP mocké) |
 | Restaurant | 8003 | menus, acceptation/refus, annulation |
@@ -89,4 +89,6 @@ donne la latence observée d'un appel, et donc la base de calibrage d'un timeout
 >   les services attendent le broker via `service_started` + reconnexion applicative.
 >   Après un ancien démarrage échoué, purger l'état résiduel : `podman compose down -v`.
 
-> État actuel : prototype fonctionnel — SAGA orchestrée, compensations et Circuit
+> État actuel : prototype fonctionnel — SAGA orchestrée et compensations. Branche
+> d'exercice : les appels sortants n'ont **aucune** protection (ni timeout, ni retry,
+> ni circuit breaker, ni bulkhead, ni fallback).

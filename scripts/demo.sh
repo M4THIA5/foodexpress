@@ -12,8 +12,6 @@
 #   3. Livraison KO  — restaurant hors zone (compensation) ..... CANCELLED
 #   4. Refus resto   — restaurant fermé (échec amont) .......... CANCELLED
 #
-# Le Circuit Breaker (Commande → Paiement) se démontre à la main : voir docs/demo.md.
-#
 # Prérequis : la stack tourne (`docker compose up --build`). Aucune dépendance
 # autre que curl + python3 (jq utilisé seulement s'il est présent, pour la couleur).
 #
@@ -182,7 +180,6 @@ main() {
   section "Bilan"
   if [ "$FAILURES" -eq 0 ]; then
     printf '  %s✓ Tous les scénarios ont produit l’état attendu.%s\n' "${GRN}${BOLD}" "$RST"
-    printf '  %sDémo bonus — Circuit Breaker : voir docs/demo.md (§5).%s\n\n' "$DIM" "$RST"
     exit 0
   fi
   printf '  %s✗ %d scénario(s) en échec.%s\n\n' "${RED}${BOLD}" "$FAILURES" "$RST"

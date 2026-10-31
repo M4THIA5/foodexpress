@@ -132,3 +132,13 @@ def test_bff_order_not_found_returns_404(client, backend):
     backend.responses[("GET", "/api/v1/orders/1")] = (404, {"detail": "absente"})
     resp = client.get("/api/v1/orders/1/suivi", headers=AUTH)
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------- Branche d'exercice sans timeout
+def test_proxy_has_no_timeout():
+    import httpx
+
+    from app.downstreams import DOWNSTREAMS
+    from app.proxy import ProxyClient
+
+    assert ProxyClient(DOWNSTREAMS)._client.timeout == httpx.Timeout(None)

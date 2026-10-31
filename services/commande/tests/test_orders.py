@@ -128,3 +128,32 @@ def test_get_order(client):
 
 def test_get_unknown_order(client):
     assert client.get(f"{API}/orders/inconnue").status_code == 404
+
+
+# ---------------------------------------------------- Branche d'exercice sans timeout
+def test_outbound_calls_have_no_timeout(monkeypatch):
+    import httpx
+
+    from app import clients as module
+
+    seen = []
+
+    def fake(url, **kwargs):
+        seen.append(kwargs.get("timeout", "absent"))
+        return httpx.Response(201, json={"id": 1, "plats": []})
+
+    monkeypatch.setattr(module.httpx, "post", fake)
+    monkeypatch.setattr(module.httpx, "get", fake)
+    c = module.ServiceClients("http://r", "http://p")
+    c.debit("o", 1)
+    c.refund(1)
+    c.cancel_order("o")
+    try:
+        c.accept_order(1, "o", [])
+    except module.RestaurantUnavailable:
+        pass  # 201 n'est pas une réponse attendue ici, seul le timeout nous intéresse
+    try:
+        c.get_menu(1)
+    except module.RestaurantUnavailable:
+        pass
+    assert seen == [None] * 5
