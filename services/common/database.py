@@ -14,7 +14,16 @@ class Base(DeclarativeBase):
 
 
 engine = (
-    create_engine(settings.database_url, pool_pre_ping=True)
+    # Autant de connexions que de threads FastAPI (40) : un thread qui tient une
+    # connexion doit pouvoir finir sa réponse, sinon ceux qui attendent le pool le
+    # bloquent. L'attente du pool est bornée : mieux vaut une erreur qu'un blocage.
+    create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_size=20,
+        max_overflow=20,
+        pool_timeout=5,
+    )
     if settings.database_url
     else None
 )

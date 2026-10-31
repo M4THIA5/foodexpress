@@ -36,6 +36,8 @@ class FakeBackend:
         if self.fail_times > 0:
             self.fail_times -= 1
             raise httpx.ConnectError("panne transitoire", request=request)
+        if self.fail == "pool":
+            raise httpx.PoolTimeout("pool plein", request=request)
         if self.fail == "timeout":
             raise httpx.ReadTimeout("amont lent", request=request)
         if self.fail == "connect":

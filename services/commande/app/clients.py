@@ -21,6 +21,7 @@ from decimal import Decimal
 
 import httpx
 
+from app.bulkhead import Bulkhead, BulkheadFullError
 from app.circuit_breaker import CircuitBreaker, CircuitOpenError
 from app.retry import with_retry
 from common.config import settings
@@ -31,6 +32,10 @@ from common.config import settings
 # Ces valeurs doivent rester inférieures au budget du Gateway (app/proxy.py).
 PAYMENT_TIMEOUT = httpx.Timeout(1.0, connect=0.5)
 RESTAURANT_TIMEOUT = httpx.Timeout(1.0, connect=0.5)
+# Appels simultanés par dépendance, sur les 40 threads de Commande. Leur somme reste en
+# dessous, pour qu'une dépendance lente laisse toujours de quoi servir les lectures.
+PAYMENT_MAX_CONCURRENT = 15
+RESTAURANT_MAX_CONCURRENT = 15
 
 
 class RestaurantUnavailable(Exception):
@@ -83,6 +88,8 @@ class ServiceClients:
         # Un circuit par dépendance : une panne de l'une n'ouvre pas celui de l'autre.
         self._breaker = breaker or CircuitBreaker()
         self._restaurant_breaker = restaurant_breaker or CircuitBreaker(name="Restaurant")
+        self._payment_bulkhead = Bulkhead("Paiement", PAYMENT_MAX_CONCURRENT)
+        self._restaurant_bulkhead = Bulkhead("Restaurant", RESTAURANT_MAX_CONCURRENT)
 
     # ---------------------------------------------------------------- Restaurant
     def get_menu(self, restaurant_id: int) -> dict[int, PlatSnapshot]:
@@ -93,8 +100,12 @@ class ServiceClients:
             return _raise_for_5xx(httpx.get(url, timeout=RESTAURANT_TIMEOUT))
 
         try:
-            resp = self._restaurant_breaker.call(lambda: with_retry(_do_get, _TRANSIENT))
-        except (CircuitOpenError, *_TRANSIENT) as exc:
+            resp = self._restaurant_bulkhead.call(
+                lambda: self._restaurant_breaker.call(
+                    lambda: with_retry(_do_get, _TRANSIENT)
+                )
+            )
+        except (BulkheadFullError, CircuitOpenError, *_TRANSIENT) as exc:
             raise RestaurantUnavailable(str(exc)) from exc
         if resp.status_code != 200:
             raise RestaurantUnavailable(f"menu HTTP {resp.status_code}")
@@ -117,10 +128,12 @@ class ServiceClients:
 
         try:
             # Rejouable : Restaurant renvoie le verdict déjà rendu pour un même order_id.
-            resp = self._restaurant_breaker.call(
-                lambda: with_retry(_do_accept, _TRANSIENT)
+            resp = self._restaurant_bulkhead.call(
+                lambda: self._restaurant_breaker.call(
+                    lambda: with_retry(_do_accept, _TRANSIENT)
+                )
             )
-        except (CircuitOpenError, *_TRANSIENT) as exc:
+        except (BulkheadFullError, CircuitOpenError, *_TRANSIENT) as exc:
             raise RestaurantUnavailable(str(exc)) from exc
         if resp.status_code == 200:
             return AcceptResult(accepted=True)
@@ -162,8 +175,10 @@ class ServiceClients:
 
         try:
             # Rejouable : Paiement est idempotent par order_id, pas de double débit.
-            return self._breaker.call(lambda: with_retry(_do_debit, _TRANSIENT))
-        except CircuitOpenError as exc:
+            return self._payment_bulkhead.call(
+                lambda: self._breaker.call(lambda: with_retry(_do_debit, _TRANSIENT))
+            )
+        except (BulkheadFullError, CircuitOpenError) as exc:
             raise PaymentUnavailable(str(exc)) from exc
         except (httpx.HTTPError, _UpstreamError) as exc:
             raise PaymentUnavailable(str(exc)) from exc

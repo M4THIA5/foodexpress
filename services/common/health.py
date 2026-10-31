@@ -7,5 +7,6 @@ router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-def health() -> dict:
+async def health() -> dict:
+    # `async` : répond sans passer par le pool de threads, même quand il est saturé.
     return {"status": "healthy", "service": settings.service_name}

@@ -119,6 +119,22 @@ def test_retry_recovers_from_transient_error(client, backend):
     assert len(backend.requests) == 2  # Retry a rejoué l'appel
 
 
+def test_full_pool_returns_503_without_retry(client, backend):
+    from tests.conftest import AUTH
+
+    backend.fail = "pool"
+    assert client.get("/api/v1/orders/1", headers=AUTH).status_code == 503
+    assert len(backend.requests) == 1
+
+
+def test_each_service_has_its_own_connection_pool():
+    from app.downstreams import DOWNSTREAMS
+    from app.proxy import ProxyClient
+
+    clients = ProxyClient(DOWNSTREAMS)._clients
+    assert len({id(c) for c in clients.values()}) == len(DOWNSTREAMS)
+
+
 def test_post_is_never_retried(client, backend):
     from tests.conftest import AUTH
 
