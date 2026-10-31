@@ -3,6 +3,9 @@
 La SAGA écrit l'événement dans la table `outbox`, **dans la même transaction** que
 l'état de la commande (`events.enqueue`). Un thread le publie ensuite et le marque comme
 émis. Broker en panne : l'événement attend, dans l'ordre, et repart à la reconnexion.
+
+Le relais rejoue aussi les annulations de débit (`PAYMENT_VOID`). Elles forment une file
+à part : une panne de Paiement ne doit pas bloquer les événements, ni l'inverse.
 """
 import logging
 import threading
@@ -13,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import events
+from app.clients import get_clients
 from app.models import OutboxEvent
 from common import metrics
 from common.database import SessionLocal
@@ -24,19 +28,32 @@ BATCH_SIZE = 100
 
 
 def relay_once(
-    session: Session, publish: Callable[[str, dict], bool] = events.publish
+    session: Session,
+    publish: Callable[[str, dict], bool] = events.publish,
+    void: Callable[[str], bool] | None = None,
 ) -> int:
-    """Publie les événements en attente, dans l'ordre. S'arrête au premier échec."""
+    """Traite chaque file dans l'ordre et s'arrête à son premier échec."""
+    void = void or get_clients().void_payment
+    is_void = OutboxEvent.event_type == events.PAYMENT_VOID
+    return _drain(
+        session,
+        ~is_void,
+        lambda row: publish(row.event_type, row.decoded_payload),
+        "fallback.outbox_en_attente",
+    ) + _drain(session, is_void, lambda row: void(row.order_id), "fallback.void_en_attente")
+
+
+def _drain(session: Session, condition, send, metric: str) -> int:
     pending = session.scalars(
         select(OutboxEvent)
-        .where(OutboxEvent.published_at.is_(None))
+        .where(OutboxEvent.published_at.is_(None), condition)
         .order_by(OutboxEvent.id)
         .limit(BATCH_SIZE)
     ).all()
     sent = 0
     for row in pending:
-        if not publish(row.event_type, row.decoded_payload):
-            metrics.incr("fallback.outbox_en_attente")
+        if not send(row):
+            metrics.incr(metric)
             break
         row.published_at = datetime.now(timezone.utc)
         session.commit()

@@ -72,3 +72,34 @@ def test_refund_full_is_idempotent(client):
     assert first.status_code == second.status_code == 200
     assert second.json()["statut_transaction"] == "REFUNDED"
     assert second.json()["montant_restant"] == 0
+
+
+# ------------------------------------------- Annulation d'un débit à l'issue inconnue
+def test_void_refunds_a_captured_debit(client):
+    tx = _capture(client, "cmd-void-1", 30.00)
+    r = client.post(f"{API}/payments/orders/cmd-void-1/void")
+    assert r.status_code == 200
+    assert r.json()["statut"] == "REFUNDED"
+    assert client.get(f"{API}/payments/{tx['id']}").json()["statut"] == "REFUNDED"
+
+
+def test_void_is_idempotent(client):
+    _capture(client, "cmd-void-2", 30.00)
+    client.post(f"{API}/payments/orders/cmd-void-2/void")
+    r = client.post(f"{API}/payments/orders/cmd-void-2/void")
+    assert r.status_code == 200
+    assert r.json()["statut"] == "REFUNDED"
+
+
+def test_void_blocks_a_debit_that_arrives_late(client):
+    assert client.post(f"{API}/payments/orders/cmd-void-3/void").json()["statut"] == "VOIDED"
+    # Le débit était encore en file chez Paiement : il ne doit rien capturer.
+    r = client.post(f"{API}/payments", json=_debit("cmd-void-3", 30.00))
+    assert r.status_code == 402
+    assert r.json()["statut"] == "VOIDED"
+
+
+def test_void_leaves_a_declined_debit_alone(client):
+    assert client.post(f"{API}/payments", json=_debit("cmd-void-4", 2000)).status_code == 402
+    r = client.post(f"{API}/payments/orders/cmd-void-4/void")
+    assert r.json()["statut"] == "DECLINED"

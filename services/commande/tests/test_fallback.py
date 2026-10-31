@@ -57,7 +57,7 @@ def test_events_survive_a_broker_outage_and_keep_their_order(client, session_fac
     client.post(f"{API}/orders", json=ORDER)
     client.post(f"{API}/orders", json=ORDER)
     with session_factory() as session:
-        assert outbox.relay_once(session, publish=lambda *_: False) == 0
+        assert outbox.relay_once(session, publish=lambda *_: False, void=None) == 0
         assert metrics.snapshot()["fallback.outbox_en_attente"] == 1
 
         sent = []
@@ -93,3 +93,27 @@ def test_metrics_endpoint_and_alert(client, caplog):
         metrics.incr("fallback.test")
     assert client.get("/metrics").json()["fallback.test"] == metrics.ALERT_THRESHOLD
     assert "ALERTE" in caplog.text
+
+
+# ---------------------------------------------- Débit à l'issue inconnue (timeout)
+def test_payment_outage_requests_a_durable_void(client, clients, session_factory):
+    clients.payment = "unavailable"
+    client.post(f"{API}/orders", json=ORDER)
+    with session_factory() as session:
+        assert outbox.relay_once(session, publish=lambda *_: False, void=lambda _: False) == 0
+        void_calls = []
+        outbox.relay_once(
+            session, publish=lambda *_: True, void=lambda o: void_calls.append(o) or True
+        )
+    assert len(void_calls) == 1
+
+
+def test_paiement_down_does_not_block_events(client, clients, session_factory):
+    clients.payment = "unavailable"
+    client.post(f"{API}/orders", json=ORDER)
+    published = []
+    with session_factory() as session:
+        outbox.relay_once(
+            session, publish=lambda t, p: published.append(t) or True, void=lambda _: False
+        )
+    assert published == ["order.cancelled"]

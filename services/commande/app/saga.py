@@ -119,6 +119,9 @@ def create_order(
         # Fail-fast (circuit ouvert / panne) → compensation immédiate.
         metrics.incr("fallback.paiement_indisponible")
         _log(order, "PAYMENT", "UNAVAILABLE", str(exc))
+        # Un timeout ne dit pas si le débit a eu lieu : annulation durable, rejouée
+        # par le relais de l'outbox tant que Paiement ne l'a pas prise en compte.
+        events.enqueue(session, events.PAYMENT_VOID, {"order_id": order.id})
         clients.cancel_order(order.id)
         return _cancel(
             session, order, "COMPENSATION_RESTAURANT", "COMPENSATED",

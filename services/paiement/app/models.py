@@ -28,7 +28,7 @@ class Transaction(Base):
     # Un débit par commande : garantit l'idempotence des re-tentatives SAGA.
     order_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     montant: Mapped[Decimal] = mapped_column(Numeric(10, 2))
-    # CAPTURED | DECLINED | PARTIALLY_REFUNDED | REFUNDED
+    # CAPTURED | DECLINED | PARTIALLY_REFUNDED | REFUNDED | VOIDED
     statut: Mapped[str] = mapped_column(String(20))
     # Référence renvoyée par le PSP en cas de succès (vide si refusé).
     psp_reference: Mapped[str] = mapped_column(String(64), default="")

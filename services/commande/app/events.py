@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 ORDER_READY_FOR_DELIVERY = "order.ready_for_delivery"
 ORDER_CONFIRMED = "order.confirmed"
 ORDER_CANCELLED = "order.cancelled"
+# Interne : jamais publié, le relais l'exécute par un appel à Paiement (app/outbox.py).
+PAYMENT_VOID = "payment.void"
 
 
 def enqueue(session: Session, event_type: str, payload: dict) -> None:

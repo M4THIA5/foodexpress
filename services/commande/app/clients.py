@@ -191,6 +191,14 @@ class ServiceClients:
         except httpx.HTTPError:
             pass
 
+    def void_payment(self, order_id: str) -> bool:
+        """Annule un débit à l'issue inconnue. Renvoie False s'il faut réessayer."""
+        url = f"{self._paiement_url}{self._api}/payments/orders/{order_id}/void"
+        try:
+            return httpx.post(url, timeout=PAYMENT_TIMEOUT).status_code == 200
+        except httpx.HTTPError:
+            return False
+
 
 def _raise_for_5xx(resp: httpx.Response) -> httpx.Response:
     if resp.status_code >= 500:

@@ -5,6 +5,7 @@
   `order_id`.
 - `POST /payments/{id}/refund` : **compensation** SAGA, idempotente. 404 si la
   transaction est inconnue, 409 si rien à rembourser ou montant > solde restant.
+- `POST /payments/orders/{order_id}/void` : annule un débit à l'issue inconnue, idempotent.
 - `GET /payments/{id}` : consultation d'une transaction.
 """
 from fastapi import APIRouter, Depends, Response
@@ -29,9 +30,14 @@ def debit(
     session: Session = Depends(get_session),
 ) -> TransactionOut:
     transaction = service.debit(session, req)
-    if transaction.statut == service.DECLINED:
+    if transaction.statut in (service.DECLINED, service.VOIDED):
         response.status_code = 402
     return transaction
+
+
+@router.post("/orders/{order_id}/void", response_model=TransactionOut)
+def void(order_id: str, session: Session = Depends(get_session)) -> TransactionOut:
+    return service.void_order(session, order_id)
 
 
 @router.get("/{transaction_id}", response_model=TransactionOut)

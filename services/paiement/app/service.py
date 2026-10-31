@@ -19,6 +19,7 @@ CAPTURED = "CAPTURED"
 DECLINED = "DECLINED"
 PARTIALLY_REFUNDED = "PARTIALLY_REFUNDED"
 REFUNDED = "REFUNDED"
+VOIDED = "VOIDED"
 
 # Statuts pour lesquels un remboursement a du sens (un débit a été capturé).
 _REFUNDABLE = {CAPTURED, PARTIALLY_REFUNDED, REFUNDED}
@@ -51,6 +52,26 @@ def debit(session: Session, req: PaymentRequest) -> Transaction:
     )
     session.add(transaction)
     session.commit()
+    session.refresh(transaction)
+    return transaction
+
+
+def void_order(session: Session, order_id: str) -> Transaction:
+    """Annule un débit dont Commande ignore l'issue (timeout). Idempotent.
+
+    Un timeout ne dit pas si le débit a eu lieu. Débit capturé : il est remboursé. Aucun
+    débit : la transaction `VOIDED` occupe l'`order_id`, de sorte qu'un débit encore en
+    file ne capturera rien à son arrivée (idempotence de `debit`).
+    """
+    transaction = session.scalar(
+        select(Transaction).where(Transaction.order_id == order_id)
+    )
+    if transaction is None:
+        transaction = Transaction(order_id=order_id, montant=Decimal("0"), statut=VOIDED)
+        session.add(transaction)
+        session.commit()
+    elif transaction.statut in (CAPTURED, PARTIALLY_REFUNDED):
+        refund(session, transaction.id, RefundRequest(motif="Débit à l'issue inconnue"))
     session.refresh(transaction)
     return transaction
 

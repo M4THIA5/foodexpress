@@ -34,8 +34,8 @@ _MESSAGES = {
     ("RESTAURANT_ACCEPT", "UNAVAILABLE"): "Le restaurant est momentanément injoignable. "
     "Votre commande n'a pas été prise, réessayez dans quelques minutes.",
     ("RESTAURANT_ACCEPT", "REFUSED"): "Le restaurant ne peut pas prendre votre commande.",
-    ("PAYMENT", "UNAVAILABLE"): "Le paiement est momentanément indisponible. "
-    "Réessayez dans quelques minutes.",
+    ("PAYMENT", "UNAVAILABLE"): "Le paiement est momentanément indisponible. Si un "
+    "débit a eu lieu, il sera annulé automatiquement. Réessayez dans quelques minutes.",
     ("PAYMENT", "DECLINED"): "Votre paiement a été refusé.",
     ("DELIVERY_DEADLINE", "EXPIRED"): "Aucun livreur n'a répondu à temps. "
     "Votre commande est annulée et remboursée.",
