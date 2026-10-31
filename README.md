@@ -78,6 +78,23 @@ curl -X POST http://127.0.0.1:8474/proxies/paiement/toxics \
 curl -X DELETE http://127.0.0.1:8474/proxies/paiement/toxics/lent
 ```
 
+Une panne ne se propage que si les appels s'accumulent. Pour observer la cascade, il
+faut dépasser les 100 connexions du Gateway, tout en surveillant un menu dans un autre
+terminal :
+
+```bash
+echo '{"client_id":42,"restaurant_id":1,"items":[{"plat_id":11,"quantite":1}]}' > /tmp/order.json
+# 150 commandes simultanées, abandonnées par le client au bout de 30 s
+seq 150 | xargs -P150 -I{} curl -s -m 30 -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer demo" -H "Content-Type: application/json" \
+  -d @/tmp/order.json "$G/orders" | sort | uniq -c
+# surveillance
+while true; do
+  curl -s -o /dev/null -m 10 -H "Authorization: Bearer demo" \
+    -w '%{http_code} %{time_total}s\n' "$G/restaurants/1/menu"; sleep 1
+done
+```
+
 La trace `saga_steps` de `GET $G/orders/<id>` est horodatée : l'écart entre deux étapes
 donne la latence observée d'un appel, et donc la base de calibrage d'un timeout.
 
