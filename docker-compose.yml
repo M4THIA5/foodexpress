@@ -1,10 +1,11 @@
 # FoodExpress — infrastructure de démonstration.
 # Gateway + 4 services (Commande, Paiement, Restaurant, Livraison)
-# + RabbitMQ + une base PostgreSQL dédiée par service (aucune base partagée).
+# + RabbitMQ + une base PostgreSQL dédiée par service (aucune base partagée)
+# + Toxiproxy entre Commande et Paiement (injection de latence).
 #
 # Lancement :  docker compose up --build
 # Ports hôte : gateway 8000, commande 8001, paiement 8002, restaurant 8003,
-#              livraison 8004, RabbitMQ mgmt 15672.
+#              livraison 8004, RabbitMQ mgmt 15672, API Toxiproxy 8474.
 
 x-service-build: &service-build
   context: .
@@ -40,6 +41,15 @@ services:
     # → « Error reading .erlang.cookie: eacces » et crash. Les services attendent
     # donc rabbitmq via `service_started` + reconnexion applicative (le broker peut
     # devenir disponible après eux).
+
+  # ------------------------------------------------- Injection de pannes réseau
+  # Commande joint Paiement à travers ce proxy (voir PAIEMENT_URL). Sans « toxic »,
+  # il est transparent. Mode d'emploi : section « Expériences » du README.
+  toxiproxy:
+    build:
+      context: toxiproxy
+    ports:
+      - "8474:8474"     # API de pilotage des toxics
 
   # ---------------------------------------------------------- Bases (1/service)
   commande-db:
@@ -101,13 +111,15 @@ services:
       DATABASE_URL: postgresql+psycopg://commande:commande@commande-db:5432/commande
       RABBITMQ_URL: amqp://foodexpress:foodexpress@rabbitmq:5672/
       RESTAURANT_URL: http://restaurant:8000
-      PAIEMENT_URL: http://paiement:8000
+      PAIEMENT_URL: http://toxiproxy:8666
     ports:
       - "8001:8000"
     depends_on:
       commande-db:
         condition: service_healthy
       rabbitmq:
+        condition: service_started
+      toxiproxy:
         condition: service_started
     healthcheck: *svc-healthcheck
 
@@ -138,6 +150,7 @@ services:
       SERVICE_NAME: restaurant
       DATABASE_URL: postgresql+psycopg://restaurant:restaurant@restaurant-db:5432/restaurant
       RABBITMQ_URL: amqp://foodexpress:foodexpress@rabbitmq:5672/
+      RESTAURANT_ERROR_EVERY: ${RESTAURANT_ERROR_EVERY:-0}
     ports:
       - "8003:8000"
     depends_on:

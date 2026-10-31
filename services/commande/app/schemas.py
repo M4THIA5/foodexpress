@@ -1,4 +1,6 @@
 """Schémas Pydantic (contrats d'API exposés dans l'OpenAPI /docs)."""
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -36,6 +38,8 @@ class SagaStepOut(BaseModel):
     etape: str
     statut: str
     payload: str
+    # Horodatage de l'étape : l'écart entre deux étapes donne la latence d'un appel.
+    timestamp: datetime
 
 
 class OrderOut(BaseModel):

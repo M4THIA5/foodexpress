@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     # URLs des services amont appelés en synchrone (orchestrateur Commande).
     restaurant_url: str | None = None
     paiement_url: str | None = None
+    # Expérience de chaos : Restaurant répond 503 une requête sur N (0 = désactivé).
+    restaurant_error_every: int = 0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

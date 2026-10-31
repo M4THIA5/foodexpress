@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import models  # noqa: F401  (enregistre les tables sur Base.metadata)
+from app.faults import add_fault_injection
 from app.routers import orders, restaurants
 from app.seed import seed_data
 from common.app_factory import create_app
@@ -26,5 +27,6 @@ async def lifespan(_: FastAPI):
 
 
 app = create_app(title="FoodExpress — Restaurant", lifespan=lifespan)
+add_fault_injection(app)
 app.include_router(restaurants.router, prefix=settings.api_prefix)
 app.include_router(orders.router, prefix=settings.api_prefix)

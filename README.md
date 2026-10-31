@@ -56,6 +56,31 @@ KO, livraison KO, refus restaurant) en une commande :
 ./scripts/demo.sh                  # 4 parcours automatisés + vérification (✓/✗)
 ```
 
+### Expériences de chaos
+
+Toutes partent d'une stack saine. Variable utilisée : `G=http://127.0.0.1:8000/api/v1`.
+
+| Expérience | Injecter | Annuler |
+|------------|----------|---------|
+| Paiement muet (allumé, ne répond plus) | `docker compose pause paiement` | `docker compose unpause paiement` |
+| Paiement arrêté (erreur immédiate) | `docker compose stop paiement` | `docker compose start paiement` |
+| Paiement lent (3 s) | voir ci-dessous | voir ci-dessous |
+| Perte du broker | `docker compose stop rabbitmq` | `docker compose start rabbitmq` |
+| Restaurant en erreur une fois sur trois | `RESTAURANT_ERROR_EVERY=3 docker compose up -d restaurant` | `docker compose up -d restaurant` |
+
+Commande joint Paiement à travers Toxiproxy, piloté par son API (port 8474) :
+
+```bash
+# 3 s de latence sur les réponses de Paiement
+curl -X POST http://127.0.0.1:8474/proxies/paiement/toxics \
+  -d '{"name":"lent","type":"latency","stream":"downstream","attributes":{"latency":3000}}'
+# retirer la latence
+curl -X DELETE http://127.0.0.1:8474/proxies/paiement/toxics/lent
+```
+
+La trace `saga_steps` de `GET $G/orders/<id>` est horodatée : l'écart entre deux étapes
+donne la latence observée d'un appel, et donc la base de calibrage d'un timeout.
+
 > **Podman rootless** :
 > - préférer `127.0.0.1` à `localhost` (la résolution IPv6 `::1` des ports publiés
 >   peut réinitialiser la connexion) ;

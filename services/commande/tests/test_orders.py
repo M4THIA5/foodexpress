@@ -35,6 +35,11 @@ def test_order_snapshot_and_total(client):
     assert steps["DELIVERY_REQUESTED"] == "OK"
 
 
+def test_saga_steps_are_timestamped(client):
+    body = client.post(f"{API}/orders", json=_order()).json()
+    assert all(step["timestamp"] for step in body["saga_steps"])
+
+
 def test_delivery_assigned_confirms_order(client):
     order_id = client.post(f"{API}/orders", json=_order()).json()["id"]
     r = client.post(f"{API}/orders/{order_id}/delivery-result", json={"success": True})
