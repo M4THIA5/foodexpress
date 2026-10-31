@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app import consumer, models  # noqa: F401  (models enregistre les tables)
+from app import consumer, deadlines, models, outbox  # noqa: F401  (models : tables)
 from app.routers import orders
 from common.app_factory import create_app
 from common.config import settings
@@ -20,14 +20,17 @@ from common.database import Base, engine
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Tâches de fond : consommateur (None sans broker), relais outbox, délais de SAGA.
+    stop_events = [consumer.start()]
     if engine is not None:
         Base.metadata.create_all(engine)
-    stop_event = consumer.start()  # None sans broker (tests, exécution isolée)
+        stop_events += [outbox.start(), deadlines.start()]
     try:
         yield
     finally:
-        if stop_event is not None:
-            stop_event.set()
+        for stop_event in stop_events:
+            if stop_event is not None:
+                stop_event.set()
 
 
 app = create_app(title="FoodExpress — Commande", lifespan=lifespan)

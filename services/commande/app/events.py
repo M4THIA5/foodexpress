@@ -12,7 +12,9 @@ import json
 import logging
 
 import pika
+from sqlalchemy.orm import Session
 
+from app.models import OutboxEvent
 from common.config import settings
 from common.messaging import EVENTS_EXCHANGE, get_connection
 
@@ -22,6 +24,17 @@ logger = logging.getLogger(__name__)
 ORDER_READY_FOR_DELIVERY = "order.ready_for_delivery"
 ORDER_CONFIRMED = "order.confirmed"
 ORDER_CANCELLED = "order.cancelled"
+
+
+def enqueue(session: Session, event_type: str, payload: dict) -> None:
+    """Écrit l'événement dans l'outbox, dans la transaction de la commande."""
+    session.add(
+        OutboxEvent(
+            order_id=payload["order_id"],
+            event_type=event_type,
+            payload=json.dumps(payload),
+        )
+    )
 
 
 def publish(event_type: str, payload: dict) -> bool:

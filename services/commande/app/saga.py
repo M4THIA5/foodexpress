@@ -10,7 +10,8 @@ Flux nominal et compensations :
   3. `Paiement.debit()` (Circuit Breaker) →
         - panne/circuit ouvert ⇒ *fail-fast* + `Restaurant.cancel()` ⇒ CANCELLED,
         - refus métier (402)   ⇒ `Restaurant.cancel()` ⇒ CANCELLED ;
-  4. publie `OrderReadyForDelivery` ⇒ AWAITING_DELIVERY (attente événement) ;
+  4. publie `OrderReadyForDelivery` (via l'outbox) ⇒ AWAITING_DELIVERY, attente de
+     l'événement bornée par un délai maximal (`expire_delivery`) ;
   5. résultat livraison (événement / rappel) →
         - `DeliveryAssigned` ⇒ CONFIRMED + `OrderConfirmed`,
         - `DeliveryFailed`   ⇒ `Paiement.refund()` + `Restaurant.cancel()` ⇒ CANCELLED.
@@ -23,6 +24,7 @@ import uuid
 from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app import events
@@ -31,8 +33,9 @@ from app.clients import (
     RestaurantUnavailable,
     ServiceClients,
 )
-from app.models import Order, OrderItem, SagaLogEntry
+from app.models import Order, OrderItem, OutboxEvent, SagaLogEntry
 from app.schemas import CreateOrderRequest
+from common import metrics
 
 PENDING = "PENDING"
 AWAITING_DELIVERY = "AWAITING_DELIVERY"
@@ -73,6 +76,7 @@ def create_order(
     try:
         menu = clients.get_menu(req.restaurant_id)
     except RestaurantUnavailable as exc:
+        metrics.incr("fallback.restaurant_indisponible")
         return _cancel(session, order, "RESTAURANT_MENU", "UNAVAILABLE", str(exc))
 
     total = Decimal("0")
@@ -101,6 +105,7 @@ def create_order(
     try:
         accept = clients.accept_order(req.restaurant_id, order.id, items_payload)
     except RestaurantUnavailable as exc:
+        metrics.incr("fallback.restaurant_indisponible")
         return _cancel(session, order, "RESTAURANT_ACCEPT", "UNAVAILABLE", str(exc))
     if not accept.accepted:
         return _cancel(session, order, "RESTAURANT_ACCEPT", "REFUSED", accept.motif)
@@ -112,6 +117,7 @@ def create_order(
         payment = clients.debit(order.id, order.montant_total)
     except PaymentUnavailable as exc:
         # Fail-fast (circuit ouvert / panne) → compensation immédiate.
+        metrics.incr("fallback.paiement_indisponible")
         _log(order, "PAYMENT", "UNAVAILABLE", str(exc))
         clients.cancel_order(order.id)
         return _cancel(
@@ -130,7 +136,8 @@ def create_order(
 
     # 4. Demande de livraison (asynchrone). La SAGA se met en attente de l'événement.
     order.statut = AWAITING_DELIVERY
-    events.publish(
+    events.enqueue(
+        session,
         events.ORDER_READY_FOR_DELIVERY,
         {"order_id": order.id, "restaurant_id": order.restaurant_id},
     )
@@ -161,7 +168,7 @@ def apply_delivery_result(
         order.statut = CONFIRMED
         _log(order, "DELIVERY_RESULT", "OK")
         _log(order, "ORDER_CONFIRMED", "OK")
-        events.publish(events.ORDER_CONFIRMED, {"order_id": order.id})
+        events.enqueue(session, events.ORDER_CONFIRMED, {"order_id": order.id})
         session.commit()
         session.refresh(order)
         return order
@@ -179,6 +186,24 @@ def apply_delivery_result(
     )
 
 
+def expire_delivery(session: Session, order_id: str, clients: ServiceClients) -> Order:
+    """Délai de livraison dépassé : on compense comme pour un échec de livraison."""
+    order = get_order(session, order_id)
+    if order.statut != AWAITING_DELIVERY:
+        return order
+    metrics.incr("fallback.livraison_delai_depasse")
+    _log(order, "DELIVERY_DEADLINE", "EXPIRED")
+    # Le broker est peut-être en panne : ne pas demander un livreur à sa reprise.
+    session.execute(
+        delete(OutboxEvent).where(
+            OutboxEvent.order_id == order_id,
+            OutboxEvent.event_type == events.ORDER_READY_FOR_DELIVERY,
+            OutboxEvent.published_at.is_(None),
+        )
+    )
+    return apply_delivery_result(session, order_id, False, clients)
+
+
 def _cancel(
     session: Session, order: Order, etape: str, statut: str, payload: str
 ) -> Order:
@@ -186,7 +211,7 @@ def _cancel(
     _log(order, etape, statut, payload)
     order.statut = CANCELLED
     _log(order, "ORDER_CANCELLED", "OK")
-    events.publish(events.ORDER_CANCELLED, {"order_id": order.id})
+    events.enqueue(session, events.ORDER_CANCELLED, {"order_id": order.id})
     session.commit()
     session.refresh(order)
     return order

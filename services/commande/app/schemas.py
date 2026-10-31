@@ -52,6 +52,8 @@ class OrderOut(BaseModel):
     montant_total: float
     transaction_id: int | None
     items: list[OrderItemOut]
+    # Explication destinée au client quand la commande est annulée.
+    message: str | None
     # Trace de la SAGA (étapes + compensations), utile à la démo/soutenance.
     saga_steps: list[SagaStepOut]
 

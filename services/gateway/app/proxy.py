@@ -19,6 +19,7 @@ import httpx
 from fastapi import Response
 
 from app.downstreams import DOWNSTREAMS
+from common import metrics
 
 # Les timeouts décroissent en descendant la chaîne, sinon le Gateway abandonne avant
 # que Commande n'ait fini de compenser. Pire cas d'une SAGA : menu 1 s + acceptation 1 s
@@ -125,6 +126,7 @@ class ProxyClient:
                     ),
                 )
             except httpx.PoolTimeout as exc:
+                metrics.incr(f"gateway.pool_plein.{service}")
                 raise GatewayError(f"{service} saturé : {exc}", status_code=503) from exc
             except httpx.TimeoutException as exc:
                 # Pas de nouvel essai : l'amont a déjà épuisé son budget, et Commande

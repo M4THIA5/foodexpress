@@ -11,6 +11,7 @@ from contextlib import AbstractAsyncContextManager
 
 from fastapi import FastAPI
 
+from common import metrics
 from common.config import settings
 from common.health import router as health_router
 
@@ -33,5 +34,9 @@ def create_app(title: str | None = None, lifespan: Lifespan | None = None) -> Fa
             "api": settings.api_prefix,
             "docs": "/docs",
         }
+
+    @app.get("/metrics", tags=["meta"])
+    def get_metrics() -> dict[str, int]:
+        return metrics.snapshot()
 
     return app

@@ -1,6 +1,6 @@
 """Modèles ORM du service Commande (base PostgreSQL dédiée).
 
-Trois tables (voir architecture.md §3.1) :
+Quatre tables (voir architecture.md §3.1) :
 - `orders`       : la commande et son cycle de vie
   (`PENDING → AWAITING_DELIVERY → CONFIRMED / CANCELLED`).
 - `order_items`  : lignes de la commande avec **snapshot** du nom et du prix du
@@ -8,10 +8,12 @@ Trois tables (voir architecture.md §3.1) :
   valide même si le menu change ensuite : aucune lecture croisée de base.
 - `saga_log`     : trace ordonnée des étapes de la SAGA (orchestration). Sert la
   traçabilité en soutenance et l'idempotence/reprise (architecture.md §6).
+- `outbox`       : événements en attente de publication (voir app/outbox.py).
 
 L'identifiant de commande est une **chaîne UUID** générée par Commande : c'est ce
 `order_id` qui est transmis à Restaurant et Paiement (couplage faible par valeur).
 """
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -23,6 +25,23 @@ from common.database import Base
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Message affiché au client, selon l'étape qui a fait échouer la SAGA.
+_MESSAGES = {
+    ("RESTAURANT_MENU", "UNAVAILABLE"): "Le restaurant est momentanément injoignable. "
+    "Votre commande n'a pas été prise, réessayez dans quelques minutes.",
+    ("RESTAURANT_ACCEPT", "UNAVAILABLE"): "Le restaurant est momentanément injoignable. "
+    "Votre commande n'a pas été prise, réessayez dans quelques minutes.",
+    ("RESTAURANT_ACCEPT", "REFUSED"): "Le restaurant ne peut pas prendre votre commande.",
+    ("PAYMENT", "UNAVAILABLE"): "Le paiement est momentanément indisponible. "
+    "Réessayez dans quelques minutes.",
+    ("PAYMENT", "DECLINED"): "Votre paiement a été refusé.",
+    ("DELIVERY_DEADLINE", "EXPIRED"): "Aucun livreur n'a répondu à temps. "
+    "Votre commande est annulée et remboursée.",
+    ("DELIVERY_RESULT", "FAILED"): "Aucun livreur n'est disponible. "
+    "Votre commande est annulée et remboursée.",
+}
 
 
 class Order(Base):
@@ -47,6 +66,17 @@ class Order(Base):
         cascade="all, delete-orphan",
         order_by="SagaLogEntry.id",
     )
+
+    @property
+    def message(self) -> str | None:
+        """Explication destinée au client, pour une commande annulée."""
+        if self.statut != "CANCELLED":
+            return None
+        for step in self.saga_steps:
+            message = _MESSAGES.get((step.etape, step.statut))
+            if message:
+                return message
+        return "Votre commande a été annulée."
 
 
 class OrderItem(Base):
@@ -81,3 +111,23 @@ class SagaLogEntry(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     order: Mapped[Order] = relationship(back_populates="saga_steps")
+
+
+class OutboxEvent(Base):
+    """Événement à publier, écrit dans la même transaction que la commande."""
+
+    __tablename__ = "outbox"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[str] = mapped_column(String(64), index=True)
+    event_type: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Vide tant que l'événement n'a pas été remis au broker.
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
+    @property
+    def decoded_payload(self) -> dict:
+        return json.loads(self.payload)

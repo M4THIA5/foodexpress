@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     paiement_url: str | None = None
     # Expérience de chaos : Restaurant répond 503 une requête sur N (0 = désactivé).
     restaurant_error_every: int = 0
+    # Attente maximale du verdict de Livraison avant compensation.
+    delivery_deadline_seconds: int = 120
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
