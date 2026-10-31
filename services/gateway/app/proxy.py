@@ -12,6 +12,9 @@ injecté via `get_proxy`, surchargeable en test (transport simulé).
 """
 from __future__ import annotations
 
+import asyncio
+import random
+
 import httpx
 from fastapi import Response
 
@@ -24,8 +27,11 @@ COMMANDE_TIMEOUT = 8.0
 # Les autres services sont des feuilles : leur réponse nominale prend quelques ms.
 GATEWAY_TIMEOUT = 2.0
 SERVICE_TIMEOUTS = {"commande": COMMANDE_TIMEOUT}
-# Retry limité sur erreurs transitoires (idempotent au niveau transport).
-GATEWAY_ATTEMPTS = 2
+# Retry : seules les lectures sont rejouées. Rejouer un `POST /orders` créerait une
+# seconde commande, car l'identifiant est généré par Commande.
+GATEWAY_ATTEMPTS = 3
+GATEWAY_BASE_DELAY = 0.05
+IDEMPOTENT_METHODS = {"GET", "HEAD"}
 
 # En-têtes à ne pas relayer tels quels vers l'amont (hop-by-hop / recalculés /
 # terminaison d'auth au Gateway — voir auth.py qui réémet `X-User-Id`).
@@ -82,8 +88,12 @@ class ProxyClient:
             for k, v in (headers or {}).items()
             if k.lower() not in _STRIP_REQUEST_HEADERS
         }
+        attempts = self._attempts if method.upper() in IDEMPOTENT_METHODS else 1
         last: GatewayError | None = None
-        for _ in range(self._attempts):
+        for attempt in range(attempts):
+            if attempt:
+                delay = GATEWAY_BASE_DELAY * 2 ** (attempt - 1)
+                await asyncio.sleep(delay + random.uniform(0, delay))
             try:
                 return await self._client.request(
                     method,
@@ -94,7 +104,9 @@ class ProxyClient:
                     timeout=SERVICE_TIMEOUTS.get(service, GATEWAY_TIMEOUT),
                 )
             except httpx.TimeoutException as exc:
-                last = GatewayError(f"{service} timeout : {exc}", status_code=504)
+                # Pas de nouvel essai : l'amont a déjà épuisé son budget, et Commande
+                # a déjà rejoué ses propres appels. Rejouer ici multiplierait la charge.
+                raise GatewayError(f"{service} timeout : {exc}", status_code=504) from exc
             except httpx.TransportError as exc:
                 last = GatewayError(f"{service} injoignable : {exc}", status_code=502)
         assert last is not None

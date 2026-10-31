@@ -119,6 +119,31 @@ def test_retry_recovers_from_transient_error(client, backend):
     assert len(backend.requests) == 2  # Retry a rejoué l'appel
 
 
+def test_post_is_never_retried(client, backend):
+    from tests.conftest import AUTH
+
+    backend.fail_times = 1
+    resp = client.post("/api/v1/orders", json={}, headers=AUTH)
+    assert resp.status_code == 502
+    assert len(backend.requests) == 1  # une seconde tentative créerait un doublon
+
+
+def test_timeout_is_not_retried(client, backend):
+    from tests.conftest import AUTH
+
+    backend.fail = "timeout"
+    client.get("/api/v1/orders/1", headers=AUTH)
+    assert len(backend.requests) == 1
+
+
+def test_retry_gives_up_after_three_attempts(client, backend):
+    from tests.conftest import AUTH
+
+    backend.fail = "connect"
+    assert client.get("/api/v1/orders/1", headers=AUTH).status_code == 502
+    assert len(backend.requests) == 3
+
+
 # ----------------------------------------------------------- Agrégation BFF
 def test_bff_aggregates_commande_and_livraison(client, backend):
     from tests.conftest import AUTH

@@ -19,16 +19,15 @@ from decimal import Decimal
 import httpx
 
 from app.circuit_breaker import CircuitBreaker, CircuitOpenError
+from app.retry import with_retry
 from common.config import settings
 
-# Calibrage sur les traces SAGA : un appel nominal prend moins de 100 ms sur la stack
-# de démonstration. 1 s laisse une large marge sans dépasser l'objectif de manière
-# durable, et 0,5 s suffit à établir une connexion sur le réseau interne.
+# Calibrage sur les traces SAGA : une commande complète prend environ 200 ms sur la
+# stack de démonstration, donc un appel isolé bien moins. 1 s laisse de la marge aux
+# pics, et 0,5 s suffit à établir une connexion sur le réseau interne.
 # Ces valeurs doivent rester inférieures au budget du Gateway (app/proxy.py).
 PAYMENT_TIMEOUT = httpx.Timeout(1.0, connect=0.5)
 RESTAURANT_TIMEOUT = httpx.Timeout(1.0, connect=0.5)
-# Retry limité sur erreurs transitoires avant de compter un échec du circuit.
-PAYMENT_ATTEMPTS = 2
 
 
 class RestaurantUnavailable(Exception):
@@ -39,8 +38,12 @@ class PaymentUnavailable(Exception):
     """Paiement injoignable ou circuit ouvert (*fail-fast*) → compensation SAGA."""
 
 
-class _PaymentServiceError(Exception):
-    """Réponse HTTP inattendue du service Paiement (5xx) : panne → échec circuit."""
+class _UpstreamError(Exception):
+    """Réponse 5xx d'un service amont : panne, rejouable, comptée par le circuit."""
+
+
+# Erreurs rejouables. Une réponse 4xx n'en fait jamais partie.
+_TRANSIENT = (httpx.TimeoutException, httpx.TransportError, _UpstreamError)
 
 
 @dataclass(frozen=True)
@@ -79,9 +82,13 @@ class ServiceClients:
     def get_menu(self, restaurant_id: int) -> dict[int, PlatSnapshot]:
         """Récupère le menu pour constituer le snapshot des lignes de commande."""
         url = f"{self._restaurant_url}{self._api}/restaurants/{restaurant_id}/menu"
+
+        def _do_get() -> httpx.Response:
+            return _raise_for_5xx(httpx.get(url, timeout=RESTAURANT_TIMEOUT))
+
         try:
-            resp = httpx.get(url, timeout=RESTAURANT_TIMEOUT)
-        except httpx.HTTPError as exc:
+            resp = with_retry(_do_get, _TRANSIENT)
+        except _TRANSIENT as exc:
             raise RestaurantUnavailable(str(exc)) from exc
         if resp.status_code != 200:
             raise RestaurantUnavailable(f"menu HTTP {resp.status_code}")
@@ -98,9 +105,14 @@ class ServiceClients:
         """Appelle `acceptOrder()` : 200 accepté, 409 refusé (verdict métier)."""
         url = f"{self._restaurant_url}{self._api}/restaurants/{restaurant_id}/orders"
         body = {"order_id": order_id, "items": items}
+
+        def _do_accept() -> httpx.Response:
+            return _raise_for_5xx(httpx.post(url, json=body, timeout=RESTAURANT_TIMEOUT))
+
         try:
-            resp = httpx.post(url, json=body, timeout=RESTAURANT_TIMEOUT)
-        except httpx.HTTPError as exc:
+            # Rejouable : Restaurant renvoie le verdict déjà rendu pour un même order_id.
+            resp = with_retry(_do_accept, _TRANSIENT)
+        except _TRANSIENT as exc:
             raise RestaurantUnavailable(str(exc)) from exc
         if resp.status_code == 200:
             return AcceptResult(accepted=True)
@@ -135,13 +147,17 @@ class ServiceClients:
                 return PaymentResult(
                     captured=False, motif=resp.json().get("motif", "Paiement refusé")
                 )
-            raise _PaymentServiceError(f"debit HTTP {resp.status_code}")
+            _raise_for_5xx(resp)
+            raise httpx.HTTPStatusError(
+                f"debit HTTP {resp.status_code}", request=resp.request, response=resp
+            )
 
         try:
-            return self._breaker.call(lambda: self._retry(_do_debit))
+            # Rejouable : Paiement est idempotent par order_id, pas de double débit.
+            return self._breaker.call(lambda: with_retry(_do_debit, _TRANSIENT))
         except CircuitOpenError as exc:
             raise PaymentUnavailable(str(exc)) from exc
-        except (httpx.HTTPError, _PaymentServiceError) as exc:
+        except (httpx.HTTPError, _UpstreamError) as exc:
             raise PaymentUnavailable(str(exc)) from exc
 
     def refund(self, transaction_id: int) -> None:
@@ -152,16 +168,11 @@ class ServiceClients:
         except httpx.HTTPError:
             pass
 
-    @staticmethod
-    def _retry(fn):
-        """Retry limité sur erreurs transitoires (le circuit compte l'échec final)."""
-        last: Exception | None = None
-        for _ in range(PAYMENT_ATTEMPTS):
-            try:
-                return fn()
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
-                last = exc
-        raise last  # type: ignore[misc]
+
+def _raise_for_5xx(resp: httpx.Response) -> httpx.Response:
+    if resp.status_code >= 500:
+        raise _UpstreamError(f"HTTP {resp.status_code}")
+    return resp
 
 
 # Instance partagée (le Circuit Breaker doit conserver son état entre requêtes).
