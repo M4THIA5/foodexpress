@@ -4,8 +4,11 @@ Ces appels sont les étapes **synchrones** de la SAGA (architecture.md §4.1) :
 l'orchestrateur a besoin du résultat pour avancer ou compenser.
 
 - Restaurant : lecture du menu (snapshot), `acceptOrder()`, `cancel()` (compensation).
-- Paiement   : `debit()` protégé par **Timeout + Retry + Circuit Breaker**
-  (architecture.md §7), `refund()` (compensation).
+- Paiement   : `debit()`, `refund()` (compensation).
+
+Les appels de la SAGA sont protégés par **Timeout + Retry + Circuit Breaker**
+(architecture.md §7), avec un circuit par dépendance. Les compensations ne passent pas
+par le circuit : un circuit ouvert ne doit pas empêcher d'annuler ou de rembourser.
 
 Le résultat *métier* est renvoyé sous forme de dataclasses ; les **pannes** (réseau,
 timeout, 5xx) lèvent `RestaurantUnavailable` / `PaymentUnavailable` — distinctes
@@ -72,11 +75,14 @@ class ServiceClients:
         restaurant_url: str | None = None,
         paiement_url: str | None = None,
         breaker: CircuitBreaker | None = None,
+        restaurant_breaker: CircuitBreaker | None = None,
     ) -> None:
         self._restaurant_url = (restaurant_url or "").rstrip("/")
         self._paiement_url = (paiement_url or "").rstrip("/")
         self._api = settings.api_prefix
+        # Un circuit par dépendance : une panne de l'une n'ouvre pas celui de l'autre.
         self._breaker = breaker or CircuitBreaker()
+        self._restaurant_breaker = restaurant_breaker or CircuitBreaker(name="Restaurant")
 
     # ---------------------------------------------------------------- Restaurant
     def get_menu(self, restaurant_id: int) -> dict[int, PlatSnapshot]:
@@ -87,8 +93,8 @@ class ServiceClients:
             return _raise_for_5xx(httpx.get(url, timeout=RESTAURANT_TIMEOUT))
 
         try:
-            resp = with_retry(_do_get, _TRANSIENT)
-        except _TRANSIENT as exc:
+            resp = self._restaurant_breaker.call(lambda: with_retry(_do_get, _TRANSIENT))
+        except (CircuitOpenError, *_TRANSIENT) as exc:
             raise RestaurantUnavailable(str(exc)) from exc
         if resp.status_code != 200:
             raise RestaurantUnavailable(f"menu HTTP {resp.status_code}")
@@ -111,8 +117,10 @@ class ServiceClients:
 
         try:
             # Rejouable : Restaurant renvoie le verdict déjà rendu pour un même order_id.
-            resp = with_retry(_do_accept, _TRANSIENT)
-        except _TRANSIENT as exc:
+            resp = self._restaurant_breaker.call(
+                lambda: with_retry(_do_accept, _TRANSIENT)
+            )
+        except (CircuitOpenError, *_TRANSIENT) as exc:
             raise RestaurantUnavailable(str(exc)) from exc
         if resp.status_code == 200:
             return AcceptResult(accepted=True)

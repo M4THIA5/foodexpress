@@ -79,3 +79,42 @@ def test_business_result_does_not_open_circuit():
     for _ in range(5):
         assert cb.call(lambda: "DECLINED") == "DECLINED"
     assert cb.state == "CLOSED"
+
+
+def test_half_open_allows_a_single_probe():
+    now = [0.0]
+    cb = CircuitBreaker(failure_threshold=1, reset_timeout=10, time_fn=lambda: now[0])
+    with pytest.raises(ValueError):
+        cb.call(_raise_value_error)
+    now[0] = 11.0
+
+    def probe_in_flight():
+        # Pendant l'essai, tout autre appel échoue sans toucher le réseau.
+        with pytest.raises(CircuitOpenError):
+            cb.call(lambda: "second appel")
+        return "ok"
+
+    assert cb.call(probe_in_flight) == "ok"
+    assert cb.state == "CLOSED"
+
+
+def _raise_value_error():
+    raise ValueError("panne")
+
+
+def test_each_dependency_has_its_own_circuit(monkeypatch):
+    import httpx
+
+    from app import clients as module, retry
+
+    def down(url, **_):
+        raise httpx.ConnectError("panne")
+
+    monkeypatch.setattr(module.httpx, "get", down)
+    monkeypatch.setattr(retry.time, "sleep", lambda _: None)
+    c = module.ServiceClients("http://resto", "http://paiement")
+    for _ in range(3):
+        with pytest.raises(module.RestaurantUnavailable):
+            c.get_menu(1)
+    assert c._restaurant_breaker.state == "OPEN"
+    assert c._breaker.state == "CLOSED"
