@@ -4,9 +4,9 @@ Commande publie sur l'exchange topic `foodexpress.events` (architecture.md §4.2
 - `OrderReadyForDelivery` → consommé par Livraison ;
 - `OrderConfirmed` / `OrderCancelled` → consommés par Notification.
 
-Publication **best-effort** : le broker peut être indisponible (démarrage, panne).
-Un échec de publication ne casse pas la SAGA — il est journalisé et l'appelant
-poursuit. En l'absence de `RABBITMQ_URL` (tests, exécution isolée), c'est un no-op.
+La SAGA n'écrit que dans l'outbox (`enqueue`) ; le relais (app/outbox.py) appelle
+`publish`, qui renvoie False si le broker est indisponible : l'événement attend alors son
+tour. En l'absence de `RABBITMQ_URL` (tests, exécution isolée), c'est un no-op.
 """
 import json
 import logging

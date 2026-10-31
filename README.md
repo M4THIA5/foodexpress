@@ -106,4 +106,28 @@ donne la latence observée d'un appel, et donc la base de calibrage d'un timeout
 >   les services attendent le broker via `service_started` + reconnexion applicative.
 >   Après un ancien démarrage échoué, purger l'état résiduel : `podman compose down -v`.
 
-> État actuel : prototype fonctionnel — SAGA orchestrée, compensations et Circuit
+## Résilience
+
+Cette branche est le **corrigé** du cas pratique. La branche `TP` est le point de
+départ, sans aucun de ces mécanismes : `git diff main TP` montre ce qu'il reste à faire.
+
+| Pattern | Où | Réglage | Pourquoi |
+|---------|-----|---------|----------|
+| Timeout | Commande | 1 s par appel, 0,5 s pour se connecter | une commande complète prend environ 200 ms |
+| Timeout | Gateway | 8 s vers Commande, 2 s ailleurs | décroissant : le pire cas d'une SAGA est d'environ 6,6 s |
+| Retry | Commande | 3 essais, 100 ms doublés, jitter | opérations idempotentes par `order_id`, jamais un 4xx |
+| Retry | Gateway | 3 essais, GET et HEAD, hors timeout | rejouer `POST /orders` créerait un doublon |
+| Circuit breaker | Commande | un par dépendance, 3 échecs, repos 15 s | un seul appel d'essai en demi-ouvert |
+| Bulkhead | Commande | 15 appels simultanés par dépendance | sur 40 threads, il en reste pour les lectures |
+| Bulkhead | Gateway | un pool par service, refus 503 en 100 ms | Commande ne peut plus priver les menus de connexions |
+| Fallback | Livraison | `AWAITING_DELIVERY` borné à 120 s, puis compensation | `DELIVERY_DEADLINE_SECONDS` |
+| Fallback | RabbitMQ | outbox rejouée à la reconnexion | aucun événement de Commande n'est perdu |
+| Fallback | Paiement, Restaurant | commande refusée, champ `message` | le client sait quoi faire |
+
+Un débit expiré a peut-être eu lieu : Commande demande son annulation à Paiement
+(`POST /payments/orders/{id}/void`), et la rejoue jusqu'à réussite. Chaque dégradation
+incrémente un compteur sur `GET /metrics`, avec une alerte dans les logs à 10 activations.
+
+> État actuel : prototype fonctionnel. Limites connues : les compteurs vivent en mémoire,
+> Livraison publie encore sans outbox (le délai de 120 s couvre ce cas), et le
+> remboursement après un échec de livraison reste best-effort.

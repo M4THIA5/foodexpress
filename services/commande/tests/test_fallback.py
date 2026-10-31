@@ -57,7 +57,7 @@ def test_events_survive_a_broker_outage_and_keep_their_order(client, session_fac
     client.post(f"{API}/orders", json=ORDER)
     client.post(f"{API}/orders", json=ORDER)
     with session_factory() as session:
-        assert outbox.relay_once(session, publish=lambda *_: False, void=None) == 0
+        assert outbox.relay_once(session, publish=lambda *_: False) == 0
         assert metrics.snapshot()["fallback.outbox_en_attente"] == 1
 
         sent = []
